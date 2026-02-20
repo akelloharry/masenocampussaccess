@@ -188,7 +188,13 @@
                 <label for="issueDesc">Description</label>
                 <textarea id="issueDesc" maxlength="400" placeholder="Describe the issue..." required></textarea>
                 <label for="issuePhoto">Photo (optional)</label>
-                <input type="file" id="issuePhoto" accept="image/*" capture="environment">
+                <div style="display:flex;gap:8px;align-items:center;">
+                    <button id="attachPhotoBtn" type="button" style="flex:0 0 auto;">Attach Photo</button>
+                    <div id="attachedPhotoName" style="font-size:0.95rem;color:#555;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px;">No file</div>
+                </div>
+                <!-- hidden inputs: camera and file picker -->
+                <input type="file" id="issuePhotoCamera" accept="image/*" capture="environment" style="display:none">
+                <input type="file" id="issuePhotoFile" accept="image/*" style="display:none">
                 <button id="reportBtn">Report Issue</button>
                 <div class="auth-status" id="authStatus">Not signed in</div>
             </div>
@@ -200,6 +206,14 @@
                 <h3>This map needs your location to enable routing and heatmap. Allow access?</h3>
                 <button id="allowLocationBtn">Allow</button>
                 <button id="denyLocationBtn" style="background:#eee;color:#333;">Deny</button>
+            </div>
+        </div>
+        <div class="modal-overlay" id="photoChoiceModal" style="display:none;">
+            <div class="modal">
+                <h3>Select photo source</h3>
+                <button id="takePhotoBtn">Take Photo</button>
+                <button id="choosePhotoBtn" style="background:#eee;color:#333;">Choose From Device</button>
+                <button id="cancelPhotoChoice" style="background:transparent;color:#666;">Cancel</button>
             </div>
         </div>
         <script src="js/qgis2web_expressions.js"></script>
@@ -1509,7 +1523,14 @@
                 const topBanner = document.getElementById('topBanner');
                 const sidebar = document.getElementById('sidebar');
                 const issueDesc = document.getElementById('issueDesc');
-                const issuePhoto = document.getElementById('issuePhoto');
+                const issuePhotoCamera = document.getElementById('issuePhotoCamera');
+                const issuePhotoFile = document.getElementById('issuePhotoFile');
+                const attachPhotoBtn = document.getElementById('attachPhotoBtn');
+                const attachedPhotoName = document.getElementById('attachedPhotoName');
+                const photoChoiceModal = document.getElementById('photoChoiceModal');
+                const takePhotoBtn = document.getElementById('takePhotoBtn');
+                const choosePhotoBtn = document.getElementById('choosePhotoBtn');
+                const cancelPhotoChoice = document.getElementById('cancelPhotoChoice');
                 const reportBtn = document.getElementById('reportBtn');
                 const authStatus = document.getElementById('authStatus');
 
@@ -1523,6 +1544,7 @@
                 let routingControl = null;
                 let routingMode = 'foot';
                 let locationWatchId = null;
+                let selectedIssueFile = null;
 
                 // --- Helper: Show/Hide Modal ---
                 function showLocationModal() {
@@ -1604,6 +1626,27 @@
                     authStatus.textContent = 'Auth error';
                 });
 
+                // --- Photo attach handlers ---
+                attachPhotoBtn.addEventListener('click', function(){ photoChoiceModal.style.display = 'flex'; });
+                cancelPhotoChoice.addEventListener('click', function(){ photoChoiceModal.style.display = 'none'; });
+                takePhotoBtn.addEventListener('click', function(){
+                    photoChoiceModal.style.display = 'none';
+                    issuePhotoCamera.click();
+                });
+                choosePhotoBtn.addEventListener('click', function(){
+                    photoChoiceModal.style.display = 'none';
+                    issuePhotoFile.click();
+                });
+                function setSelectedFile(fileInput) {
+                    const f = fileInput.files && fileInput.files[0];
+                    if (f) {
+                        selectedIssueFile = f;
+                        attachedPhotoName.textContent = f.name;
+                    }
+                }
+                issuePhotoCamera.addEventListener('change', function(){ setSelectedFile(issuePhotoCamera); });
+                issuePhotoFile.addEventListener('change', function(){ setSelectedFile(issuePhotoFile); });
+
                 // --- Issue Reporting ---
                 reportBtn.onclick = async () => {
                     if (!user) return;
@@ -1618,7 +1661,7 @@
                     let lat = null, lng = null;
                     if (userLocation) [lat, lng] = userLocation;
                     let photoUrl = '';
-                    let file = issuePhoto.files[0];
+                    let file = selectedIssueFile || (issuePhotoFile.files && issuePhotoFile.files[0]) || (issuePhotoCamera.files && issuePhotoCamera.files[0]) || null;
                     try {
                         if (file) {
                             const ts = Date.now();
@@ -1638,7 +1681,10 @@
                         };
                         await db.collection('issues').add(issue);
                         issueDesc.value = '';
-                        issuePhoto.value = '';
+                        selectedIssueFile = null;
+                        attachedPhotoName.textContent = 'No file';
+                        try { issuePhotoFile.value = ''; } catch(e){}
+                        try { issuePhotoCamera.value = ''; } catch(e){}
                         reportBtn.textContent = 'Reported!';
                         setTimeout(() => { reportBtn.textContent = 'Report Issue'; }, 1200);
                     } catch (e) {
@@ -1657,13 +1703,13 @@
                     let marker;
                     if (d.photoUrl) {
                         const icon = L.divIcon({
-                            html: `<div style="width:30px;height:30px;border-radius:50%;overflow:hidden;border:3px solid ${statusColor};box-shadow:0 2px 6px rgba(0,0,0,0.12);"><img src="${d.photoUrl}" style="width:100%;height:100%;object-fit:cover;"></div>`,
+                            html: `<div style="width:30px;height:30px;border-radius:50%;overflow:hidden;border:2px solid ${statusColor};box-shadow:0 2px 6px rgba(0,0,0,0.12);display:flex;align-items:center;justify-content:center;"><img src="${d.photoUrl}" style="width:100%;height:100%;object-fit:cover;display:block;"></div>`,
                             className: ''
                         });
                         marker = L.marker([d.lat, d.lng], {icon});
                     } else {
                         const icon = L.divIcon({
-                            html: `<div style="width:18px;height:18px;border-radius:50%;background:${statusColor};box-shadow:0 2px 6px rgba(0,0,0,0.12);"></div>`,
+                            html: `<div style="width:30px;height:30px;border-radius:50%;background:${statusColor};box-shadow:0 2px 6px rgba(0,0,0,0.12);display:block;"></div>`,
                             className: ''
                         });
                         marker = L.marker([d.lat, d.lng], {icon});
