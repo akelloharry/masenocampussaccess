@@ -7,7 +7,7 @@
         <meta name="mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-capable" content="yes">
         <link rel="stylesheet" href="css/leaflet.css">
-        <link rel="stylesheet" href="css/L.Control.Layers.Tree.css">
+        <!-- L.Control.Layers.Tree not present locally; removed to avoid 404 -->
         <link rel="stylesheet" href="css/L.Control.Locate.min.css">
         <link rel="stylesheet" href="css/qgis2web.css">
         <link rel="stylesheet" href="css/fontawesome-all.min.css">
@@ -19,10 +19,8 @@
                 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
                 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
                 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-storage-compat.js"></script>
-                <!-- Leaflet Routing Machine & Heatmap -->
+                <!-- Leaflet Routing Machine CSS (script loaded after Leaflet below) -->
                 <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.css" />
-                <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
-                <script src="https://unpkg.com/leaflet.heat/dist/leaflet-heat.js"></script>
                 <style>
                     html, body {
                         height: 100%;
@@ -176,6 +174,52 @@
                         width: 100%;
                         margin-top: 8px;
                     }
+                    /* simple toggle switch */
+                    .switch {
+                        position: relative;
+                        display: inline-block;
+                        width: 44px;
+                        height: 24px;
+                    }
+                    .switch input { display:none; }
+                    .slider {
+                        position: absolute;
+                        cursor: pointer;
+                        top: 0; left: 0; right: 0; bottom: 0;
+                        background-color: #ccc;
+                        transition: .2s;
+                        border-radius: 24px;
+                    }
+                    .slider:before {
+                        position: absolute;
+                        content: "";
+                        height: 18px;
+                        width: 18px;
+                        left: 3px;
+                        bottom: 3px;
+                        background-color: white;
+                        transition: .2s;
+                        border-radius: 50%;
+                        box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+                    }
+                    input:checked + .slider { background-color: #0066cc; }
+                    input:checked + .slider:before { transform: translateX(20px); }
+                </style>
+                <style>
+                    /* Photon suggestion dropdown */
+                    .photon-suggestions {
+                        position: absolute;
+                        background: #fff;
+                        border: 1px solid #d0d7de;
+                        border-radius: 6px;
+                        box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+                        z-index: 5000;
+                        max-height: 220px;
+                        overflow: auto;
+                        min-width: 220px;
+                    }
+                    .photon-suggestion { padding: 8px 10px; cursor: pointer; border-bottom: 1px solid #f0f0f0; }
+                    .photon-suggestion:hover { background:#f6f9ff; }
                 </style>
         
         <title>MASENO UNIVERSITY ACCESS MAP</title>
@@ -184,6 +228,13 @@
         <div class="top-banner" id="topBanner"></div>
         <div class="sidebar" id="sidebar">
             <h2>Report an Issue</h2>
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+                <div style="font-size:0.98rem;font-weight:600;color:#222;">Use my location</div>
+                <label class="switch" title="Toggle location">
+                    <input type="checkbox" id="useLocationToggle">
+                    <span class="slider"></span>
+                </label>
+            </div>
             <div class="card">
                 <label for="issueDesc">Description</label>
                 <textarea id="issueDesc" maxlength="400" placeholder="Describe the issue..." required></textarea>
@@ -218,7 +269,10 @@
         </div>
         <script src="js/qgis2web_expressions.js"></script>
         <script src="js/leaflet.js"></script>
-        <script src="js/L.Control.Layers.Tree.min.js"></script>
+        <!-- L.Control.Layers.Tree plugin missing locally; removed to avoid 404 -->
+        <!-- Load routing & heat AFTER Leaflet so `L` is defined -->
+        <script src="https://unpkg.com/leaflet-routing-machine@latest/dist/leaflet-routing-machine.js"></script>
+        <script src="js/leaflet-heat.js"></script>
         <script src="js/L.Control.Locate.min.js"></script>
         <script src="js/multi-style-layer.js"></script>
         <script src="js/leaflet.rotatedMarker.js"></script>
@@ -1506,6 +1560,7 @@
                     authDomain: "campussaccess.firebaseapp.com",
                     projectId: "campussaccess",
                     storageBucket: "campussaccess.firebasestorage.app",
+                    databaseURL: "https://campussaccess-default-rtdb.europe-west1.firebasedatabase.app",
                     messagingSenderId: "280666150100",
                     appId: "1:280666150100:web:ce2c33dafa84885f145741",
                     measurementId: "G-WGPLM71VW2"
@@ -1586,18 +1641,59 @@
                         { enableHighAccuracy: true, timeout: 10000 }
                     );
                 }
-                // Show modal on first load
-                window.addEventListener('DOMContentLoaded', () => {
-                    showLocationModal();
-                });
-                allowLocationBtn.onclick = () => {
-                    requestLocation();
-                };
-                denyLocationBtn.onclick = () => {
+                // Replace mandatory modal with sidebar toggle
+                const useLocationToggle = document.getElementById('useLocationToggle');
+
+                function startLocationWatch() {
+                    if (!navigator.geolocation) {
+                        showTopBanner('Geolocation not supported.');
+                        if (useLocationToggle) useLocationToggle.checked = false;
+                        return;
+                    }
+                    if (locationWatchId) return;
+                    locationWatchId = navigator.geolocation.watchPosition(pos => {
+                        userLocation = [pos.coords.latitude, pos.coords.longitude];
+                        locationAllowed = true;
+                        hideTopBanner();
+                        if (routingControl) routingControl.spliceWaypoints(0, 1, userLocation);
+                        try { updateUserDot(); } catch(e){}
+                        try { tryPrefillFrom(); } catch(e){}
+                        try {
+                            if (user && user.uid) {
+                                const myRef = rtdb.ref('userLocations/' + user.uid);
+                                myRef.set({lat: userLocation[0], lng: userLocation[1], ts: Date.now(), uid: user.uid, intensity: 1}).catch(()=>{});
+                                myRef.onDisconnect().remove();
+                            }
+                        } catch(e) {}
+                    }, err => {
+                        locationAllowed = false;
+                        showTopBanner('Location access denied. Routing and heatmap limited.');
+                    }, { enableHighAccuracy: true, timeout: 10000 });
+                }
+
+                function stopLocationWatch() {
+                    try {
+                        if (locationWatchId && navigator.geolocation && navigator.geolocation.clearWatch) {
+                            navigator.geolocation.clearWatch(locationWatchId);
+                        }
+                    } catch(e){}
+                    locationWatchId = null;
                     locationAllowed = false;
-                    hideLocationModal();
-                    showTopBanner('Location access denied. Routing and heatmap limited.');
-                };
+                    userLocation = null;
+                    try { updateUserDot(); } catch(e){}
+                    try { if (user && user.uid) rtdb.ref('userLocations/' + user.uid).remove(); } catch(e){}
+                }
+
+                if (useLocationToggle) {
+                    useLocationToggle.addEventListener('change', function() {
+                        if (this.checked) {
+                            requestLocation();
+                            startLocationWatch();
+                        } else {
+                            stopLocationWatch();
+                        }
+                    });
+                }
 
                 // --- Firebase Auth ---
                 function updateAuthStatus() {
@@ -1688,7 +1784,10 @@
                         reportBtn.textContent = 'Reported!';
                         setTimeout(() => { reportBtn.textContent = 'Report Issue'; }, 1200);
                     } catch (e) {
+                        console.error('Report error:', e);
                         reportBtn.textContent = 'Error';
+                        showTopBanner('Upload failed — check Firebase Storage CORS and browser privacy (Tracking Prevention).');
+                        setTimeout(() => { hideTopBanner(); }, 8000);
                         setTimeout(() => { reportBtn.textContent = 'Report Issue'; }, 1200);
                     }
                     reportBtn.disabled = false;
@@ -1718,7 +1817,8 @@
                     if (d.photoUrl) popupHtml += `<img src='${d.photoUrl}' style='width:100%;border-radius:8px;margin-bottom:8px;'>`;
                     popupHtml += `<div style='font-weight:600;margin-bottom:6px;'>${d.desc}</div>`;
                     popupHtml += `<div style='font-size:0.95em;color:#666;margin:6px 0;'>Status: <b>${d.status}</b></div>`;
-                    if (user && user.uid === d.createdBy) {
+                    // Allow signed-in users to change status (creator-only restriction removed so managers can update)
+                    if (user) {
                         // Creator can change status
                         if (d.status === 'open') {
                             popupHtml += `<button onclick="window._setIssueStatus('${doc.id}','in_progress')" style='margin-top:8px;width:100%;background:#ffcc00;color:#000;border:none;border-radius:6px;padding:7px 0;font-weight:600;'>Mark In Progress</button>`;
@@ -1729,6 +1829,9 @@
                         } else if (d.status === 'resolved') {
                             popupHtml += `<button onclick="window._setIssueStatus('${doc.id}','open')" style='margin-top:8px;width:100%;background:#eee;color:#333;border:none;border-radius:6px;padding:7px 0;font-weight:600;'>Reopen</button>`;
                         }
+                    } else {
+                        // show who reported it when viewer is not signed in
+                        if (d.createdBy) popupHtml += `<div style='font-size:0.85em;color:#777;margin-top:8px;'>Reported by: ${d.createdBy}</div>`;
                     }
                     popupHtml += `</div>`;
                     marker.bindPopup(popupHtml);
@@ -1836,12 +1939,59 @@
                 // Destination input: use Photon search or click on map
                 const fromInput = document.getElementById('fromInput');
                 const destInput = document.getElementById('destInput');
-                destInput.addEventListener('input', function() {
-                    // Use Photon search (already present in map)
-                    // If user types, try to find feature by name
-                    // (for demo, just clear destLatLng)
+                // suggestions container
+                const destSuggestions = document.createElement('div');
+                destSuggestions.className = 'photon-suggestions';
+                destSuggestions.style.display = 'none';
+                document.body.appendChild(destSuggestions);
+                let destMarker = null;
+                function clearDestSuggestions() { destSuggestions.innerHTML = ''; destSuggestions.style.display = 'none'; }
+
+                // Debounced Photon autocomplete
+                let destTimer = null;
+                destInput.addEventListener('input', function(e) {
                     destLatLng = null;
+                    if (destTimer) clearTimeout(destTimer);
+                    const q = this.value && this.value.trim();
+                    if (!q || q.length < 2) { clearDestSuggestions(); return; }
+                    destTimer = setTimeout(async () => {
+                        try {
+                            const url = 'https://photon.komoot.io/api/?q=' + encodeURIComponent(q) + '&limit=6';
+                            const res = await fetch(url);
+                            if (!res.ok) { clearDestSuggestions(); return; }
+                            const js = await res.json();
+                            destSuggestions.innerHTML = '';
+                            js.features.forEach(f => {
+                                const name = (f.properties.name || f.properties.street || f.properties.housenumber || '') + (f.properties.city ? (', ' + f.properties.city) : '') || (f.properties.state || f.properties.country || '');
+                                const txt = name || (f.properties.formatted || 'Unknown');
+                                const el = document.createElement('div');
+                                el.className = 'photon-suggestion';
+                                el.textContent = txt;
+                                el.dataset.lat = f.geometry.coordinates[1];
+                                el.dataset.lng = f.geometry.coordinates[0];
+                                el.addEventListener('click', () => {
+                                    const lat = parseFloat(el.dataset.lat);
+                                    const lng = parseFloat(el.dataset.lng);
+                                    destLatLng = [lat, lng];
+                                    destInput.value = txt;
+                                    clearDestSuggestions();
+                                    if (destMarker) map.removeLayer(destMarker);
+                                    destMarker = L.marker(destLatLng).addTo(map);
+                                    map.setView(destLatLng, 16);
+                                });
+                                destSuggestions.appendChild(el);
+                            });
+                            // position suggestions under input
+                            const r = destInput.getBoundingClientRect();
+                            destSuggestions.style.left = (r.left + window.scrollX) + 'px';
+                            destSuggestions.style.top = (r.bottom + window.scrollY + 6) + 'px';
+                            destSuggestions.style.minWidth = Math.max(220, r.width) + 'px';
+                            destSuggestions.style.display = js.features.length ? 'block' : 'none';
+                        } catch (err) { clearDestSuggestions(); }
+                    }, 220);
                 });
+                // click outside to close
+                document.addEventListener('click', function(ev){ if (!destSuggestions.contains(ev.target) && ev.target !== destInput) clearDestSuggestions(); });
                 // Prefill `fromInput` with device location when available
                 function tryPrefillFrom() {
                     try {
@@ -1851,7 +2001,6 @@
                     } catch(e){}
                 }
                 map.on('click', function(e) {
-                    if (sidebar.contains(document.activeElement)) return;
                     // If user has focused the From input, set From, otherwise set Destination
                     const active = document.activeElement;
                     if (active && active.id === 'fromInput') {
@@ -1859,6 +2008,8 @@
                     } else {
                         destLatLng = [e.latlng.lat, e.latlng.lng];
                         destInput.value = `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`;
+                        if (destMarker) map.removeLayer(destMarker);
+                        destMarker = L.marker(destLatLng).addTo(map);
                     }
                 });
                 document.getElementById('routeBtn').onclick = () => {
@@ -1879,6 +2030,18 @@
                     // Determine 'to'
                     let to = null;
                     if (destLatLng) to = destLatLng;
+                    // If user typed a search but didn't click suggestion, use first suggestion if available
+                    if (!to && destSuggestions && destSuggestions.children && destSuggestions.children.length > 0) {
+                        const first = destSuggestions.children[0];
+                        const lat = parseFloat(first.dataset.lat);
+                        const lng = parseFloat(first.dataset.lng);
+                        if (!isNaN(lat) && !isNaN(lng)) {
+                            to = [lat, lng];
+                            // set input to the suggestion text
+                            destInput.value = first.textContent || destInput.value;
+                            clearDestSuggestions();
+                        }
+                    }
                     if (!to && destInput && destInput.value) {
                         const parts = destInput.value.split(',');
                         if (parts.length === 2) {
@@ -1951,21 +2114,13 @@
                     if (heatmapOn) attachRTDBListener(); else detachRTDBListener();
                 };
 
-                // --- Watch Position for Heatmap (simulate RTDB update) ---
-                if (navigator.geolocation) {
-                    locationWatchId = navigator.geolocation.watchPosition(pos => {
-                        userLocation = [pos.coords.latitude, pos.coords.longitude];
-                        try { updateUserDot(); } catch(e){}
-                        try { tryPrefillFrom(); } catch(e){}
-                        try {
-                            if (user && user.uid) {
-                                const myRef = rtdb.ref('userLocations/' + user.uid);
-                                myRef.set({lat: userLocation[0], lng: userLocation[1], ts: Date.now(), uid: user.uid, intensity: 1}).catch(()=>{});
-                                myRef.onDisconnect().remove();
-                            }
-                        } catch(e) {}
-                    });
-                }
+                // --- Watch Position for Heatmap (only when toggle enabled) ---
+                // start automatically if the toggle is already checked
+                try {
+                    if (typeof useLocationToggle !== 'undefined' && useLocationToggle && useLocationToggle.checked) {
+                        startLocationWatch();
+                    }
+                } catch(e) {}
 
                 // --- Midnight refresh: clear resolved issues daily ---
                 function clearResolvedIssues() {
